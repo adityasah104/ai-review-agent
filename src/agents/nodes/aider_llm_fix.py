@@ -1,7 +1,9 @@
 import subprocess
 import structlog
+import os
 from src.agents.state import PRReviewState
 from src.config.settings import settings
+from src.azure_client.auth import get_azure_devops_token
 
 log = structlog.get_logger()
 
@@ -60,13 +62,14 @@ Rules you must follow:
         return {"aider_fix_applied": False, "aider_fix_summary": "No files to fix."}
 
     try:
+        token = await get_azure_devops_token()
         # Make sure we're on the right branch
         subprocess.run(
             ["git", "checkout", branch],
             cwd=repo_path, check=True, capture_output=True,
         )
         subprocess.run(
-            ["git", "pull", "origin", branch],
+            ["git", "-c", f"http.extraheader=AUTHORIZATION: bearer {token}", "pull", "origin", branch],
             cwd=repo_path, check=True, capture_output=True,
         )
 
@@ -195,7 +198,7 @@ Rules:
                 cwd=repo_path, check=True, capture_output=True,
             )
             subprocess.run(
-                ["git", "push", "origin", branch],
+                ["git", "-c", f"http.extraheader=AUTHORIZATION: bearer {token}", "push", "origin", branch],
                 cwd=repo_path, check=True, capture_output=True,
             )
             summary = (

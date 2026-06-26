@@ -1,16 +1,7 @@
-import base64
 import httpx
 from typing import List, Dict, Optional
 from src.config.settings import settings
-
-def _get_headers() -> Dict[str, str]:
-    """Returns Azure DevOps auth headers using PAT."""
-    token = base64.b64encode(f":{settings.AZURE_DEVOPS_PAT}".encode()).decode()
-    return {
-        "Authorization": f"Basic {token}",
-        "Content-Type": "application/json",
-    }
-
+from src.azure_client.auth import get_auth_headers
 def _base_url() -> str:
     return (
         f"https://dev.azure.com/{settings.AZURE_DEVOPS_ORG}/"
@@ -23,10 +14,11 @@ async def get_pr_diff(repository_id: str, pr_id: int) -> List[Dict]:
     Returns a list of dicts with file path and change type.
     """
     async with httpx.AsyncClient(timeout=30) as client:
+        headers = await get_auth_headers()
         # Get latest iteration ID
         iter_resp = await client.get(
             f"{_base_url()}/git/repositories/{repository_id}/pullRequests/{pr_id}/iterations",
-            headers=_get_headers(),
+            headers=headers,
             params={"api-version": "7.1"},
         )
         iter_resp.raise_for_status()
@@ -40,7 +32,7 @@ async def get_pr_diff(repository_id: str, pr_id: int) -> List[Dict]:
         changes_resp = await client.get(
             f"{_base_url()}/git/repositories/{repository_id}/pullRequests/{pr_id}"
             f"/iterations/{latest_iter_id}/changes",
-            headers=_get_headers(),
+            headers=headers,
             params={"api-version": "7.1"},
         )
         changes_resp.raise_for_status()
@@ -50,9 +42,10 @@ async def get_pr_diff(repository_id: str, pr_id: int) -> List[Dict]:
 async def get_file_content(repository_id: str, file_path: str, branch: str) -> Optional[str]:
     """Fetches raw file content from a branch."""
     async with httpx.AsyncClient(timeout=30) as client:
+        headers = await get_auth_headers()
         resp = await client.get(
             f"{_base_url()}/git/repositories/{repository_id}/items",
-            headers=_get_headers(),
+            headers=headers,
             params={
                 "path": file_path,
                 "versionDescriptor.version": branch,
@@ -70,9 +63,10 @@ async def get_file_content(repository_id: str, file_path: str, branch: str) -> O
 async def post_pr_comment(repository_id: str, pr_id: int, comment_text: str) -> Dict:
     """Posts a top-level comment (thread) to a PR."""
     async with httpx.AsyncClient(timeout=30) as client:
+        headers = await get_auth_headers()
         resp = await client.post(
             f"{_base_url()}/git/repositories/{repository_id}/pullRequests/{pr_id}/threads",
-            headers=_get_headers(),
+            headers=headers,
             params={"api-version": "7.1"},
             json={
                 "comments": [

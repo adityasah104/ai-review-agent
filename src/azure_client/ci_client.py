@@ -1,15 +1,27 @@
-import base64
 import httpx
 from typing import Optional, Dict
 from src.config.settings import settings
+from src.azure_client.auth import get_auth_headers
+import os
+import requests
 
 
-def _get_headers() -> Dict[str, str]:
-    token = base64.b64encode(f":{settings.AZURE_DEVOPS_PAT}".encode()).decode()
-    return {
-        "Authorization": f"Basic {token}",
-        "Content-Type": "application/json",
+def get_devops_token():
+    tenant_id = os.environ["AZURE_TENANT_ID"]
+    client_id = os.environ["AZURE_CLIENT_ID"]
+    client_secret = os.environ["AZURE_CLIENT_SECRET"]
+
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        # Azure DevOps's resource scope — note the trailing /.default
+        "scope": "499b84ac-1321-427f-aa17-267ca6975798/.default",
     }
+    resp = requests.post(url, data=data)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
 
 
 def _base_url() -> str:
@@ -25,9 +37,10 @@ async def get_latest_build_for_branch(source_branch: str) -> Optional[Dict]:
     source_branch should be in the format 'refs/heads/feature/my-branch'.
     """
     async with httpx.AsyncClient(timeout=30) as client:
+        headers = await get_auth_headers()
         resp = await client.get(
             f"{_base_url()}/build/builds",
-            headers=_get_headers(),
+            headers=headers,
             params={
                 "branchName": source_branch,
                 "$top": 1,
@@ -47,10 +60,11 @@ async def get_build_logs(build_id: int) -> str:
     Returns concatenated log text for a build. Used to parse lint errors.
     """
     async with httpx.AsyncClient(timeout=60) as client:
+        headers = await get_auth_headers()
         # Get list of log entries
         logs_resp = await client.get(
             f"{_base_url()}/build/builds/{build_id}/logs",
-            headers=_get_headers(),
+            headers=headers,
             params={"api-version": "7.1"},
         )
         logs_resp.raise_for_status()
@@ -61,7 +75,7 @@ async def get_build_logs(build_id: int) -> str:
             log_id = entry["id"]
             log_text_resp = await client.get(
                 f"{_base_url()}/build/builds/{build_id}/logs/{log_id}",
-                headers=_get_headers(),
+                headers=headers,
                 params={"api-version": "7.1"},
             )
             if log_text_resp.status_code == 200:

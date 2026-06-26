@@ -4,7 +4,7 @@
 > **Platform:** Azure DevOps · Amazon Bedrock · LangGraph  
 > **Model:** Amazon Nova Pro (via AWS Bedrock)  
 > **Aider Version:** v0.86.2+  
-> **Last Updated:** June 23, 2026  
+> **Last Updated:** June 26, 2026  
 
 ---
 
@@ -51,6 +51,7 @@ The agent operates entirely in the background. A developer opens a Pull Request,
 | **Code Fixer** | Aider v0.86.2 | Applies LLM-generated fixes to actual files |
 | **Python Linter** | Ruff | Validates and auto-formats Python code |
 | **SQL Linter** | SQLFluff | Validates and auto-formats SQL/dbt models |
+| **Authentication** | Microsoft Entra ID (Service Principal) | Secure OAuth token generation for ADO |
 | **Version Control** | Azure DevOps Git | Source of truth for all PRs and commits |
 | **Database** | SQLite | Stores job queue, PR metadata, run history |
 | **Webhook Tunnel** | Ngrok | Exposes local server to Azure DevOps |
@@ -126,6 +127,7 @@ The server validates the event, creates a job in SQLite, and enqueues it.
 
 ### Step 3 — CI Status Check (`ci_status.py`)
 - Polls the Azure DevOps Builds API for the latest pipeline run on the PR branch
+- Smartly checks both standard branch builds (`refs/heads/branch`) and PR validation builds (`refs/pull/<pr_id>/merge`)
 - Waits up to 120 seconds for the build to complete
 - Returns `ci_passed: True/False` and the raw CI log summary
 
@@ -205,7 +207,7 @@ ai-review-agent/
 ├── .env.example                     # Template — committed, safe to share
 ├── .gitignore                       # Ignores .env, .venv, *.db, chroma_db, etc.
 ├── requirements.txt
-├── DOCUMENTATION.md                 # This file
+├── ReadMe.md                        # This file
 └── src/
     ├── agents/
     │   ├── graph.py                 # LangGraph StateGraph definition
@@ -221,6 +223,7 @@ ai-review-agent/
     │       ├── aider_llm_fix.py     # Bug auto-fix (per-file + validation gate)
     │       └── publish_review.py    # PR comment publisher
     ├── azure_client/
+    │   ├── auth.py                  # Service Principal OAuth token generation
     │   ├── pr_client.py             # Azure DevOps PR REST API calls
     │   └── ci_client.py             # Azure DevOps Build REST API calls
     ├── config/
@@ -256,7 +259,10 @@ demo-python-dbt-fixed/               # Demo repository (target of agent reviews)
 | `AZURE_DEVOPS_ORG` | Azure DevOps organisation name | — |
 | `AZURE_DEVOPS_PROJECT` | Azure DevOps project name | — |
 | `AZURE_DEVOPS_REPO` | Azure DevOps repository name | — |
-| `AZURE_DEVOPS_PAT` | Personal Access Token for API calls | — |
+| `AZURE_TENANT_ID` | (Optional) Microsoft Entra ID Tenant ID | — |
+| `AZURE_CLIENT_ID` | (Optional) Service Principal Client ID for OAuth | — |
+| `AZURE_CLIENT_SECRET` | (Optional) Service Principal Secret Value | — |
+| `AZURE_DEVOPS_PAT` | (Legacy) Personal Access Token (fallback) | — |
 | `AZURE_DEVOPS_WEBHOOK_SECRET` | Shared secret for webhook validation | — |
 | `AWS_ACCESS_KEY_ID` | AWS credentials for Bedrock | — |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for Bedrock | — |
@@ -337,6 +343,7 @@ An **LLM** (Amazon Nova Pro) is a text-in, text-out model. It can read and under
 | `--auto-lint` | Runs ruff after each edit and feeds errors back to Nova Pro |
 | `--lint-cmd "python: ruff check ."` | Specifies the lint command for Python files |
 | `--model bedrock/amazon.nova-pro-v1:0` | Specifies the Bedrock model endpoint |
+| `--no-check-update`, `--no-gui`, `--no-browser` | Headless execution flags (prevents browser tabs popping open) |
 
 ---
 
@@ -474,7 +481,7 @@ An **LLM** (Amazon Nova Pro) is a text-in, text-out model. It can read and under
 
 ---
 
-## 10. Recent Test Rounds (June 23, 2026)
+## 10. Recent Test Rounds (June 23–26, 2026)
 
 ### Round 8 — Stability & Revert Test
 **Branch:** `feature/presentation-stress-test`  
@@ -555,15 +562,30 @@ Total time: ~3 minutes
 
 ---
 
+### Round 12 — Enterprise Identity & CI Pipeline Polling Fix ✅
+**Date:** June 26, 2026  
+**Goal:** Replace legacy Personal Access Tokens (PATs) with enterprise-grade Service Principals (Microsoft Entra ID) to give the agent its own identity, and fix a bug where PR validation pipelines were invisible to the agent.  
+**Implementation:**  
+1. **OAuth Authentication:** Created `auth.py` to securely exchange `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` for temporary OAuth Bearer tokens. Injected the token via `http.extraheader` for Git push/pull, and updated the REST API clients to use Bearer Auth.
+2. **Dual-Branch Polling:** Updated `ci_status.py` to simultaneously query the Azure DevOps API for standard branch builds (`refs/heads/branch`) and Pull Request builds (`refs/pull/<id>/merge`).
+
+**Result:**  
+- The agent securely authenticates as a dedicated Service Principal, removing human identity from automated PR comments.
+- The "Waiting for CI build" bug was successfully resolved. The agent instantly locates PR validation pipelines triggered by Azure DevOps branch policies.
+
+**Overall rating for Round 12: 10/10** — Authentication and pipeline polling are now fully enterprise-ready.
+
+---
+
 ## 11. What the Agent Is Currently Missing
 
-### 10.1 No Final CI Verification After Bug Fix
+### 11.1 No Final CI Verification After Bug Fix
 The agent runs a CI fix loop before the LLM review but has **no verification loop after** the Aider LLM fix. If Aider's bug fixes introduce new linting issues, the PR stays in a failing CI state with no further agent intervention.
 
-### 10.2 SQL Injection Not Always Fixed
+### 11.2 SQL Injection Not Always Fixed
 The agent correctly detects and reports SQL injection vulnerabilities but sometimes fails to apply the actual code fix. Nova Pro understands the concept but struggles with applying the precise diff transformation required to switch from f-string interpolation to parameterised queries.
 
-### 10.3 Weak Code Quality Detection
+### 11.3 Weak Code Quality Detection
 The agent reliably catches **security** bugs (100% on critical) but misses many **code quality** patterns:
 - Missing context managers (`with open(...)`)
 - `print()` vs structured `logging`
@@ -574,10 +596,7 @@ The agent reliably catches **security** bugs (100% on critical) but misses many 
 ### 11.4 Cross-File Dependency Blindness
 The Layer 2 (per-file) architecture processes files in isolation. If a fix in `etl_pipeline.py` changes a function signature that `data_processor.py` calls, the second file will not be updated accordingly.
 
-### 11.6 No Final CI Verification After LLM Fix
-The agent runs a CI fix loop *before* the LLM review but has **no verification loop after** the Aider LLM fix. If Aider's bug fixes introduce new linting issues, the PR stays in a failing CI state with no further agent intervention.
-
-### 11.7 Single Model Dependency
+### 11.5 Single Model Dependency
 The entire agent relies on Amazon Nova Pro. There is no fallback if the model is unavailable, rate-limited, or returns a malformed response.
 
 ---
@@ -616,32 +635,23 @@ If the agent finds **zero critical findings** and all fixes pass CI, automatical
 #### 4. Smart File Grouping for Layer 2
 Before processing files one at a time, analyse the import graph to group files that share dependencies. Files that import each other are sent to Aider together; independent files are processed alone.
 
-#### 5. Confidence Scoring
-Add a `confidence` field (0.0–1.0) to each finding. Only findings above a threshold (e.g., 0.7) trigger auto-fix. Low-confidence findings are reported but not auto-applied.
-
-#### 6. PR Diff Filtering in Findings
-Map each finding's line number back to the PR diff. Findings in lines that were not touched by the developer are flagged as `pre-existing` and excluded from the auto-fix, but still shown as informational notes.
-
-#### 7. Auto-Merge on Clean Review
-If the agent finds **zero critical findings** and all fixes pass CI, automatically approve and merge the PR using the Azure DevOps REST API. This is true No-HITL operation.
-
 ---
 
 ### 🔵 Low Priority / Future Research
 
-#### 8. Vector Store for Project-Specific Rules
+#### 5. Vector Store for Project-Specific Rules
 Use ChromaDB (already integrated) to store organisation-specific coding standards. The context retrieval node fetches relevant rules and injects them into each agent's system prompt, making reviews project-aware.
 
-#### 9. Multi-Model Ensemble
+#### 6. Multi-Model Ensemble
 Run two different models (e.g., Nova Pro + Claude Haiku) and only report a finding if both models agree. This dramatically reduces false positives.
 
-#### 10. GitHub / GitLab Support
+#### 7. GitHub / GitLab Support
 Abstract the Azure DevOps integration into a generic `VCSProvider` interface, then implement `GitHubProvider` and `GitLabProvider` backends. The agent logic remains unchanged.
 
-#### 11. Slack / Teams Notification
+#### 8. Slack / Teams Notification
 Post a summary to a Slack or Teams channel when a review is complete, including the finding count, severity breakdown, and a direct link to the PR comment.
 
-#### 12. Agent Dashboard (Web UI)
+#### 9. Agent Dashboard (Web UI)
 Build a web UI connected to the SQLite database showing:
 - Real-time job queue status
 - Per-PR review history
@@ -654,7 +664,7 @@ Build a web UI connected to the SQLite database showing:
 
 The AI PR Review Agent is a fully autonomous code review system that catches **100% of critical security vulnerabilities** and applies intelligent auto-fixes using a safe, per-file validation architecture.
 
-As of **June 23, 2026**, the system has completed 10 test rounds. The architecture was progressively hardened through real failure scenarios including token limit overflows, LLM hallucinations corrupting config files, and false-positive validation failures. All three major failure modes have been resolved.
+As of **June 26, 2026**, the system has completed 12 test rounds. The architecture was progressively hardened through real failure scenarios including token limit overflows, LLM hallucinations corrupting config files, and false-positive validation failures. All three major failure modes have been resolved.
 
 | Metric | Status |
 |---|---|
@@ -664,6 +674,8 @@ As of **June 23, 2026**, the system has completed 10 test rounds. The architectu
 | Confidence Scoring | ✅ Implemented |
 | Diff-Based Review (Noise Reduction) | ✅ Implemented |
 | Professional Comment Formatting | ✅ Implemented |
+| Service Principal (OAuth) Auth | ✅ Implemented |
+| Dual-Branch CI Polling | ✅ Implemented |
 | Critical Security Detection | ✅ 100% |
 | Overall Fix Success Rate | ~95% |
 | Current Rating | **9.5/10** |

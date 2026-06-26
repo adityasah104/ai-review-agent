@@ -2,11 +2,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Azure DevOps
+    # Azure DevOps (OAuth / SP)
+    AZURE_TENANT_ID: str = ""
+    AZURE_CLIENT_ID: str = ""
+    AZURE_CLIENT_SECRET: str = ""
+    
+    # Azure DevOps (Legacy/General)
     AZURE_DEVOPS_ORG: str
     AZURE_DEVOPS_PROJECT: str
     AZURE_DEVOPS_REPO: str
-    AZURE_DEVOPS_PAT: str
+    AZURE_DEVOPS_PAT: str = ""
     AZURE_DEVOPS_WEBHOOK_SECRET: str
 
     # AWS Bedrock

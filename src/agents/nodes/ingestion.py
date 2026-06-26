@@ -3,6 +3,7 @@ import structlog
 from src.agents.state import PRReviewState
 from src.azure_client.pr_client import get_pr_diff, get_file_content
 from src.config.settings import settings
+from src.azure_client.auth import get_azure_devops_token
 
 log = structlog.get_logger()
 
@@ -62,9 +63,12 @@ async def run(state: PRReviewState) -> dict:
 
         try:
             # Fetch latest remote refs so the diff is accurate
+            token = await get_azure_devops_token()
             subprocess.run(
-                ["git", "fetch", "origin"],
-                cwd=repo_path, capture_output=True, timeout=30,
+                ["git", "-c", f"http.extraheader=AUTHORIZATION: bearer {token}", "fetch", "origin"],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
             )
             for file_meta in changed_files:
                 rel_path = file_meta["path"].lstrip("/")

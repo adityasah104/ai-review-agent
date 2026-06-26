@@ -3,6 +3,7 @@ import subprocess
 import structlog
 from src.agents.state import PRReviewState
 from src.config.settings import settings
+from src.azure_client.auth import get_azure_devops_token
 
 log = structlog.get_logger()
 
@@ -46,12 +47,13 @@ async def run(state: PRReviewState) -> dict:
 
     try:
         # Switch to the feature branch in the demo repo
+        token = await get_azure_devops_token()
         subprocess.run(
             ["git", "checkout", branch],
             cwd=repo_path, check=True, capture_output=True,
         )
         subprocess.run(
-            ["git", "pull", "origin", branch],
+            ["git", "-c", f"http.extraheader=AUTHORIZATION: bearer {token}", "pull", "origin", branch],
             cwd=repo_path, check=True, capture_output=True,
         )
 
@@ -122,7 +124,7 @@ Fix only the issues in the file `{file_path}` reported above. Rules:
                 cwd=repo_path, check=True, capture_output=True,
             )
             subprocess.run(
-                ["git", "push", "origin", branch],
+                ["git", "-c", f"http.extraheader=AUTHORIZATION: bearer {token}", "push", "origin", branch],
                 cwd=repo_path, check=True, capture_output=True,
             )
             log.info("aider_ci_fix_committed", branch=branch, attempt=attempts)
